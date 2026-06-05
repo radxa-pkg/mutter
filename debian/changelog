@@ -1,3 +1,10 @@
+mutter (50.1-0ubuntu2.1-radxa-1) resolute; urgency=medium
+
+  * d/p/radxa/kms-plane-Avoid-assigning-plane-active-on-other-CRTC.patch:
+    Fix plane switching CRTC on Qualcomm platforms causing EINVAL.
+
+ -- "Radxa Computer Co., Ltd" <dev@radxa.com>  Wed, 04 Jun 2026 20:30:00 +0800
+
 mutter (50.1-0ubuntu2.1) resolute; urgency=medium
 
   [ Alessandro Astone ]
