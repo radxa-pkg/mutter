@@ -21,3 +21,4 @@ backends-color-device-Split-out-the-color-device-setup.patch
 backends-color-device-Reuse-already-known-devices-for-equ.patch
 tests-dbusrunner-Use-sh-to-launch-umockdev-wrapper.patch
 gdctl-Do-not-crash-if-backlight-property-is-not-available.patch
+radxa/kms-plane-Avoid-assigning-plane-active-on-other-CRTC.patch

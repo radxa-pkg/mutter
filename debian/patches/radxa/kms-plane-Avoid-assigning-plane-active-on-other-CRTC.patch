@@ -1,0 +1,142 @@
+From: Alessandro Astone <alessandro.astone@canonical.com>
+Date: Fri, 12 Dec 2025 11:12:12 +0100
+Subject: kms/plane: Avoid assigning a plane that is active on another CRTC
+
+The DRM atomic API does not allow switching a plane from one CRTC to
+another in a single commit. On Qualcomm platforms (SC8280XP/Q8B), the
+kernel's `plane_switching_crtc()` check rejects atomic commits that
+reassign a plane to a different CRTC without first disabling it.
+
+Add a `current_crtc_id` field to `MetaKmsPlane` (read from the DRM
+plane at init time) and use it in `find_unassigned_plane()` to skip
+planes that are currently active on a different CRTC. Also skip planes
+that are already assigned to another CRTC in mutter's internal state.
+
+This fixes "drmModeAtomicCommit: Invalid argument" errors when toggling
+mirror/extend mode with multiple displays connected.
+
+Origin: upstream, https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/4850
+Bug: https://gitlab.gnome.org/GNOME/mutter/-/issues/4399
+Bug-Radxa: HDMI/DP multi-display mode switching EINVAL on Q8B (SC8280XP)
+Forwarded: not-needed
+Last-Update: 2026-06-04
+---
+ src/backends/native/meta-crtc-kms.c          | 40 ++++++++++++++++++++++++++++
+ src/backends/native/meta-kms-plane-private.h |  2 ++
+ src/backends/native/meta-kms-plane.c         |  8 ++++++
+ 3 files changed, 50 insertions(+)
+
+diff --git a/src/backends/native/meta-crtc-kms.c b/src/backends/native/meta-crtc-kms.c
+index f65ca5607..838964b54 100644
+--- a/src/backends/native/meta-crtc-kms.c
++++ b/src/backends/native/meta-crtc-kms.c
+@@ -30,6 +30,7 @@
+ #include "backends/native/meta-kms-device.h"
+ #include "backends/native/meta-kms-mode.h"
+ #include "backends/native/meta-kms-plane.h"
++#include "backends/native/meta-kms-plane-private.h"
+ #include "backends/native/meta-kms-update.h"
+ #include "backends/native/meta-kms.h"
+ #include "backends/native/meta-monitor-manager-native.h"
+@@ -276,6 +277,31 @@ crtc_assigned_plane (MetaCrtcKms      *crtc_kms,
+     }
+ }
+ 
++static gboolean
++is_plane_active_on_other_crtc (MetaKmsDevice   *kms_device,
++                               MetaKmsPlane    *kms_plane,
++                               MetaKmsCrtc     *target_kms_crtc,
++                               MetaKmsPlaneType kms_plane_type)
++{
++  GList *l;
++
++  for (l = meta_kms_device_get_crtcs (kms_device); l; l = l->next)
++    {
++      MetaKmsCrtc *kms_crtc = l->data;
++      MetaCrtcKms *crtc_kms;
++
++      if (kms_crtc == target_kms_crtc)
++        continue;
++
++      crtc_kms = meta_crtc_kms_from_kms_crtc (kms_crtc);
++
++      if (crtc_assigned_plane (crtc_kms, kms_plane_type) == kms_plane)
++        return TRUE;
++    }
++
++  return FALSE;
++}
++
+ static gboolean
+ is_plane_active (MetaKmsDevice *kms_device,
+                  MetaKmsPlane  *kms_plane)
+@@ -309,6 +335,7 @@ find_unassigned_plane (MetaCrtcKms      *crtc_kms,
+ {
+   MetaKmsCrtc *kms_crtc = meta_crtc_kms_get_kms_crtc (crtc_kms);
+   MetaKmsDevice *kms_device = meta_kms_crtc_get_device (kms_crtc);
++  uint32_t target_crtc_id = meta_kms_crtc_get_id (kms_crtc);
+   MetaKmsPlane *assigned_plane = crtc_assigned_plane (crtc_kms, kms_plane_type);
+   GList *l;
+ 
+@@ -331,6 +358,19 @@ find_unassigned_plane (MetaCrtcKms      *crtc_kms,
+       if (!meta_kms_plane_is_usable_with (kms_plane, kms_crtc))
+         continue;
+ 
++      /*
++       * The DRM atomic API does not allow switching a plane from one CRTC
++       * to another in a single commit.  Skip planes that are currently
++       * active on a different CRTC to avoid EINVAL from the kernel.
++       */
++      if (meta_kms_plane_get_current_crtc_id (kms_plane) != 0 &&
++          meta_kms_plane_get_current_crtc_id (kms_plane) != target_crtc_id)
++        continue;
++
++      if (is_plane_active_on_other_crtc (kms_device, kms_plane,
++                                          kms_crtc, kms_plane_type))
++        continue;
++
+       if (is_plane_assigned (kms_plane, kms_plane_type,
+                              crtc_assignments))
+         continue;
+diff --git a/src/backends/native/meta-kms-plane-private.h b/src/backends/native/meta-kms-plane-private.h
+index c34488ec9..18885fd67 100644
+--- a/src/backends/native/meta-kms-plane-private.h
++++ b/src/backends/native/meta-kms-plane-private.h
+@@ -90,3 +90,5 @@ uint64_t meta_kms_plane_get_prop_drm_value (MetaKmsPlane     *plane,
+ 
+ MetaKmsPropType meta_kms_plane_get_prop_internal_type (MetaKmsPlane     *plane,
+                                                        MetaKmsPlaneProp  prop);
++
++uint32_t meta_kms_plane_get_current_crtc_id (MetaKmsPlane *plane);
+diff --git a/src/backends/native/meta-kms-plane.c b/src/backends/native/meta-kms-plane.c
+index 268981a2a..a0e89c5e7 100644
+--- a/src/backends/native/meta-kms-plane.c
++++ b/src/backends/native/meta-kms-plane.c
+@@ -46,6 +46,7 @@ struct _MetaKmsPlane
+   gboolean is_fake;
+ 
+   uint32_t id;
++  uint32_t current_crtc_id;
+ 
+   uint32_t possible_crtcs;
+ 
+@@ -97,6 +98,12 @@ meta_kms_plane_get_plane_type (MetaKmsPlane *plane)
+   return plane->type;
+ }
+ 
++uint32_t
++meta_kms_plane_get_current_crtc_id (MetaKmsPlane *plane)
++{
++  return plane->current_crtc_id;
++}
++
+ const MetaKmsPlaneCursorSizeHints *
+ meta_kms_plane_get_cursor_size_hints (MetaKmsPlane *plane)
+ {
+@@ -758,6 +765,7 @@ meta_kms_plane_new (MetaKmsPlaneType         type,
+   plane = g_object_new (META_TYPE_KMS_PLANE, NULL);
+   plane->type = type;
+   plane->id = drm_plane->plane_id;
++  plane->current_crtc_id = drm_plane->crtc_id;
+   plane->possible_crtcs = drm_plane->possible_crtcs;
+   plane->device = meta_kms_impl_device_get_device (impl_device);
