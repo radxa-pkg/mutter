@@ -1,6 +1,17 @@
+mutter (50.1-0ubuntu2.1-radxa-2) resolute; urgency=medium
+
+  * d/p/radxa/0002-kms-plane-dynamic-current-crtc-tracking.patch:
+    New incremental patch on top of upstream MR !4850, adding dynamic
+    current_crtc_id tracking on MetaKmsPlane via set_config(),
+    assign_planes(), and unset_config().  Fixes primary display
+    hot-unplug causing dock disappearance and mouse freeze on Q8B
+    (SC8280XP) with DP+HDMI dual display.
+
+ -- "Radxa Computer Co., Ltd" <dev@radxa.com>  Thu, 12 Jun 2026 13:45:00 +0800
+
 mutter (50.1-0ubuntu2.1-radxa-1) resolute; urgency=medium
 
-  * d/p/radxa/kms-plane-Avoid-assigning-plane-active-on-other-CRTC.patch:
+  * d/p/radxa/0001-kms-plane-Avoid-assigning-plane-active-on-other-CRTC.patch:
     Fix plane switching CRTC on Qualcomm platforms causing EINVAL.
 
  -- "Radxa Computer Co., Ltd" <dev@radxa.com>  Wed, 04 Jun 2026 20:30:00 +0800

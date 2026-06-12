@@ -1,0 +1,138 @@
+From: Chongbiao Chen <chenchongbiao@radxa.com>
+Date: Thu, 12 Jun 2026 10:30:00 +0800
+Subject: kms/plane: Dynamic current_crtc_id tracking on plane assign/unassign
+
+The upstream fix (MR !4850) reads current_crtc_id from DRM at init
+time but never updates it.  On Qualcomm platforms this causes stale
+CRTC tracking after mode switches and hotplug events, leading to:
+
+  - DP+HDMI dual display: unplugging primary DP causes dock
+    disappearance and mouse freeze on the remaining HDMI display
+  - drmModeAtomicCommit EINVAL when toggling mirror/extend modes
+
+Track plane-to-CRTC assignment dynamically in set_config,
+assign_planes, and unset_config so that find_unassigned_plane()
+always sees the correct CRTC binding.  Also add a setter for
+current_crtc_id and initialize it for fake planes.
+
+This is an independent implementation of dynamic plane-CRTC tracking,
+inspired by the same problem space as upstream MR !5055 but using a
+different approach (dynamic setter in assign/unassign paths rather
+than rewriting is_plane_active).
+
+Bug: https://gitlab.gnome.org/GNOME/mutter/-/issues/4399
+Bug-Radxa: DP+HDMI hot-unplug dock/mouse freeze on Q8B (SC8280XP)
+Forwarded: not-needed
+Last-Update: 2026-06-16
+Applied-Upstream: not-yet
+---
+ src/backends/native/meta-crtc-kms.c          | 39 +++++++++++++++++++++++++---
+ src/backends/native/meta-kms-plane-private.h |  2 ++
+ src/backends/native/meta-kms-plane.c         |  8 ++++++
+ 3 files changed, 46 insertions(+), 3 deletions(-)
+
+diff --git a/src/backends/native/meta-crtc-kms.c b/src/backends/native/meta-crtc-kms.c
+index 838964b54..f34c90ef8 100644
+--- a/src/backends/native/meta-crtc-kms.c
++++ b/src/backends/native/meta-crtc-kms.c
+@@ -335,7 +335,6 @@ find_unassigned_plane (MetaCrtcKms      *crtc_kms,
+ {
+   MetaKmsCrtc *kms_crtc = meta_crtc_kms_get_kms_crtc (crtc_kms);
+   MetaKmsDevice *kms_device = meta_kms_crtc_get_device (kms_crtc);
+-  uint32_t target_crtc_id = meta_kms_crtc_get_id (kms_crtc);
+   MetaKmsPlane *assigned_plane = crtc_assigned_plane (crtc_kms, kms_plane_type);
+   GList *l;
+ 
+@@ -351,6 +350,7 @@ find_unassigned_plane (MetaCrtcKms      *crtc_kms,
+   for (l = meta_kms_device_get_planes (kms_device); l; l = l->next)
+     {
+       MetaKmsPlane *kms_plane = l->data;
++      uint32_t target_crtc_id = meta_kms_crtc_get_id (kms_crtc);
+ 
+       if (meta_kms_plane_get_plane_type (kms_plane) != kms_plane_type)
+         continue;
+@@ -435,9 +435,18 @@ meta_crtc_kms_set_config (MetaCrtc             *crtc,
+ {
+   MetaCrtcKms *crtc_kms = META_CRTC_KMS (crtc);
+   CrtcKmsAssignment *kms_assignment = backend_private;
++  MetaKmsCrtc *kms_crtc = meta_crtc_kms_get_kms_crtc (crtc_kms);
++  uint32_t crtc_id = meta_kms_crtc_get_id (kms_crtc);
+ 
+   crtc_kms->assigned_primary_plane = kms_assignment->primary_plane;
+   crtc_kms->assigned_cursor_plane = kms_assignment->cursor_plane;
++
++  if (kms_assignment->primary_plane)
++    meta_kms_plane_set_current_crtc_id (kms_assignment->primary_plane,
++                                        crtc_id);
++  if (kms_assignment->cursor_plane)
++    meta_kms_plane_set_current_crtc_id (kms_assignment->cursor_plane,
++                                        crtc_id);
+ }
+ 
+ void
+@@ -445,8 +454,16 @@ meta_crtc_kms_assign_planes (MetaCrtcKms  *crtc_kms,
+                              MetaKmsPlane *primary_plane,
+                              MetaKmsPlane *cursor_plane)
+ {
++  MetaKmsCrtc *kms_crtc = meta_crtc_kms_get_kms_crtc (crtc_kms);
++  uint32_t crtc_id = meta_kms_crtc_get_id (kms_crtc);
++
+   crtc_kms->assigned_primary_plane = primary_plane;
+   crtc_kms->assigned_cursor_plane = cursor_plane;
++
++  if (primary_plane)
++    meta_kms_plane_set_current_crtc_id (primary_plane, crtc_id);
++  if (cursor_plane)
++    meta_kms_plane_set_current_crtc_id (cursor_plane, crtc_id);
+ }
+ 
+ static void
+@@ -457,6 +474,11 @@ meta_crtc_kms_unset_config (MetaCrtc *crtc)
+   if (meta_crtc_kms_is_leased (crtc))
+     return;
+ 
++  if (crtc_kms->assigned_primary_plane)
++    meta_kms_plane_set_current_crtc_id (crtc_kms->assigned_primary_plane, 0);
++  if (crtc_kms->assigned_cursor_plane)
++    meta_kms_plane_set_current_crtc_id (crtc_kms->assigned_cursor_plane, 0);
++
+   crtc_kms->assigned_primary_plane = NULL;
+   crtc_kms->assigned_cursor_plane = NULL;
+ }
+diff --git a/src/backends/native/meta-kms-plane-private.h b/src/backends/native/meta-kms-plane-private.h
+index 18885fd67..6532e93cf 100644
+--- a/src/backends/native/meta-kms-plane-private.h
++++ b/src/backends/native/meta-kms-plane-private.h
+@@ -92,3 +92,5 @@ MetaKmsPropType meta_kms_plane_get_prop_internal_type (MetaKmsPlane     *plane,
+                                                        MetaKmsPlaneProp  prop);
+ 
+ uint32_t meta_kms_plane_get_current_crtc_id (MetaKmsPlane *plane);
++void meta_kms_plane_set_current_crtc_id (MetaKmsPlane *plane,
++                                          uint32_t      crtc_id);
+diff --git a/src/backends/native/meta-kms-plane.c b/src/backends/native/meta-kms-plane.c
+index a0e89c5e7..f4e359779 100644
+--- a/src/backends/native/meta-kms-plane.c
++++ b/src/backends/native/meta-kms-plane.c
+@@ -102,6 +102,13 @@ meta_kms_plane_get_current_crtc_id (MetaKmsPlane *plane)
+   return plane->current_crtc_id;
+ }
+ 
++void
++meta_kms_plane_set_current_crtc_id (MetaKmsPlane *plane,
++                                    uint32_t      crtc_id)
++{
++  plane->current_crtc_id = crtc_id;
++}
++
+ const MetaKmsPlaneCursorSizeHints *
+ meta_kms_plane_get_cursor_size_hints (MetaKmsPlane *plane)
+ {
+@@ -801,6 +808,7 @@ meta_kms_plane_new_fake (MetaKmsPlaneType  type,
+   plane = g_object_new (META_TYPE_KMS_PLANE, NULL);
+   plane->type = type;
+   plane->is_fake = TRUE;
++  plane->current_crtc_id = meta_kms_crtc_get_id (crtc);
+   plane->possible_crtcs = 1 << meta_kms_crtc_get_idx (crtc);
+   plane->device = meta_kms_crtc_get_device (crtc);
+
+ 

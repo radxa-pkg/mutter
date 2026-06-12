@@ -1,0 +1,56 @@
+From: Chongbiao Chen <chenchongbiao@radxa.com>
+Date: Mon, 15 Jun 2026 18:40:00 +0800
+Subject: Fix compositor freeze after primary monitor hot-unplug
+
+Return safe defaults from meta_display_get_monitor_geometry() and
+meta_display_get_monitor_scale() for out-of-range monitor indices,
+and schedule a redraw after rebuilding stage views to restart the
+frame clock on remaining views.
+
+Bug-Radxa: Type-C unplug freezing remaining HDMI display on Q8B
+Last-Update: 2026-06-16
+---
+diff --git a/src/backends/meta-stage.c b/src/backends/meta-stage.c
+index 66b5aed5d..258714081 100644
+--- a/src/backends/meta-stage.c
++++ b/src/backends/meta-stage.c
+@@ -551,6 +551,8 @@ meta_stage_rebuild_views (MetaStage *stage)
+   meta_monitor_manager_get_screen_size (monitor_manager, &width, &height);
+   clutter_actor_set_size (CLUTTER_ACTOR (stage), width, height);
+ 
++  clutter_stage_schedule_update (CLUTTER_STAGE (stage));
++
+   g_list_foreach (stage->overlays,
+                   (GFunc) meta_overlay_invalidate_views,
+                   NULL);
+diff --git a/src/core/display.c b/src/core/display.c
+index 273a5831e..b052c4c67 100644
+--- a/src/core/display.c
++++ b/src/core/display.c
+@@ -3051,9 +3051,14 @@ meta_display_get_monitor_geometry (MetaDisplay  *display,
+ #endif
+ 
+   g_return_if_fail (META_IS_DISPLAY (display));
+-  g_return_if_fail (monitor >= 0 && monitor < n_logical_monitors);
+   g_return_if_fail (geometry != NULL);
+ 
++  if (monitor < 0 || monitor >= n_logical_monitors)
++    {
++      *geometry = (MtkRectangle) { 0, };
++      return;
++    }
++
+   logical_monitor =
+     meta_monitor_manager_get_logical_monitor_from_number (monitor_manager,
+                                                           monitor);
+@@ -3083,7 +3088,9 @@ meta_display_get_monitor_scale (MetaDisplay *display,
+ #endif
+ 
+   g_return_val_if_fail (META_IS_DISPLAY (display), 1.0f);
+-  g_return_val_if_fail (monitor >= 0 && monitor < n_logical_monitors, 1.0f);
++
++  if (monitor < 0 || monitor >= n_logical_monitors)
++    return 1.0f;
+ 
+   logical_monitor =
+     meta_monitor_manager_get_logical_monitor_from_number (monitor_manager,
