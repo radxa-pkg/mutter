@@ -1,3 +1,20 @@
+mutter (50.1-0ubuntu2.2-radxa-1) resolute; urgency=medium
+
+  * d/p/radxa/0001-kms-plane-Avoid-assigning-plane-active-on-other-CRTC.patch:
+    Fix plane switching CRTC on Qualcomm platforms causing EINVAL.
+
+  * d/p/radxa/0002-kms-plane-dynamic-crtc-tracking-and-unassign.patch:
+    New incremental patch on top of upstream MR !4850, adding dynamic
+    current_crtc_id tracking on MetaKmsPlane via set_config(),
+    assign_planes(), and unset_config().  Fixes primary display
+    hot-unplug causing dock disappearance and mouse freeze on Q8B
+    (SC8280XP) with DP+HDMI dual display.
+
+  * d/p/radxa/0003-fix-hot-unplug-freeze.patch:
+    Fix compositor freeze after primary monitor hot-unplug.
+
+ -- "Radxa Computer Co., Ltd" <dev@radxa.com>  Tue, 30 Jun 2026 11:19:56 +0800
+
 mutter (50.1-0ubuntu2.2) resolute; urgency=medium
 
   * d/p: Fix same-window drag-and-drop on touchscreen (LP: #2151278)
