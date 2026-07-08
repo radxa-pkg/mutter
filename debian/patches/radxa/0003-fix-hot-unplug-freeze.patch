@@ -1,0 +1,68 @@
+From: Chongbiao Chen <chenchongbiao@radxa.com>
+Date: Mon, 7 Jul 2026 18:00:00 +0800
+Subject: Fix compositor freeze after primary monitor hot-unplug
+
+Return safe defaults from meta_display_get_monitor_geometry() and
+meta_display_get_monitor_scale() for out-of-range monitor indices,
+and schedule a redraw after rebuilding stage views to restart the
+frame clock on remaining views.
+
+When a monitor is hot-unplugged, JS handlers fire during the
+MONITORS_CHANGING signal while actors still reference the old
+monitor index.  The g_return_if_fail / g_return_val_if_fail macros
+leave geometry uninitialized (NaN), clutter_actor_allocate() fails
+its assertion, and the actor remains in "needs allocation" forever
+— blocking the entire paint cycle.
+
+Additionally, mutter's stage view rebuild path in mutter 48 does
+not restart the frame clock after tearing down old views and
+creating new ones.  Add clutter_stage_schedule_update() to ensure
+the compositor resumes painting.
+
+Bug-Radxa: hot-unplug freeze after resolution switch on Q6A (SC7280)
+Last-Update: 2026-07-07
+---
+diff --git a/src/backends/meta-stage.c b/src/backends/meta-stage.c
+index 34add204ba..1028199529 100644
+--- a/src/backends/meta-stage.c
++++ b/src/backends/meta-stage.c
+@@ -561,6 +561,8 @@ meta_stage_rebuild_views (MetaStage *stage)
+   meta_monitor_manager_get_screen_size (monitor_manager, &width, &height);
+   clutter_actor_set_size (CLUTTER_ACTOR (stage), width, height);
+ 
++  clutter_stage_schedule_update (CLUTTER_STAGE (stage));
++
+   g_list_foreach (stage->overlays,
+                   (GFunc) meta_overlay_invalidate_views,
+                   NULL);
+diff --git a/src/core/display.c b/src/core/display.c
+index c2600ec753..daf9cc904f 100644
+--- a/src/core/display.c
++++ b/src/core/display.c
+@@ -3308,9 +3308,14 @@ meta_display_get_monitor_geometry (MetaDisplay  *display,
+ #endif
+ 
+   g_return_if_fail (META_IS_DISPLAY (display));
+-  g_return_if_fail (monitor >= 0 && monitor < n_logical_monitors);
+   g_return_if_fail (geometry != NULL);
+ 
++  if (monitor < 0 || monitor >= n_logical_monitors)
++    {
++      *geometry = (MtkRectangle) { 0, };
++      return;
++    }
++
+   logical_monitor =
+     meta_monitor_manager_get_logical_monitor_from_number (monitor_manager,
+                                                           monitor);
+@@ -3340,7 +3345,9 @@ meta_display_get_monitor_scale (MetaDisplay *display,
+ #endif
+ 
+   g_return_val_if_fail (META_IS_DISPLAY (display), 1.0f);
+-  g_return_val_if_fail (monitor >= 0 && monitor < n_logical_monitors, 1.0f);
++
++  if (monitor < 0 || monitor >= n_logical_monitors)
++    return 1.0f;
+ 
+   logical_monitor =
+     meta_monitor_manager_get_logical_monitor_from_number (monitor_manager,

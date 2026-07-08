@@ -1,0 +1,53 @@
+From: Chongbiao Chen <chenchongbiao@radxa.com>
+Date: Mon, 7 Jul 2026 19:00:00 +0800
+Subject: Fix frame lifecycle corruption on mode-set + hotplug
+
+Two fixes for frame lifecycle issues that cause permanent compositor
+freeze after resolution switch followed by monitor hotplug:
+
+1. meta_frame_native_release(): replace g_return_if_fail assertion
+   with g_clear_object() to gracefully release dangling KMS updates.
+   During hotplug, a pending frame may be freed before its KMS update
+   is submitted — this is expected, not a programming error.
+
+2. notify_view_crtc_presented(): when frame_info is NULL (e.g. because
+   the mode-set fallback callback already consumed it), still call
+   notify_frame_complete / promote_posted_frame / maybe_post_next_frame
+   to ensure the frame clock driver schedules the next frame.
+   Previously the g_return_if_fail returned early, skipping
+   maybe_post_next_frame and permanently freezing the compositor.
+
+Bug-Radxa: freeze after resolution switch + hotplug on Q6A (SC7280)
+Last-Update: 2026-07-07
+---
+diff --git a/src/backends/native/meta-frame-native.c b/src/backends/native/meta-frame-native.c
+index 98cd917c73..0c1bcc94dd 100644
+--- a/src/backends/native/meta-frame-native.c
++++ b/src/backends/native/meta-frame-native.c
+@@ -48,7 +48,7 @@ meta_frame_native_release (ClutterFrame *frame)
+   g_clear_object (&frame_native->buffer);
+   g_clear_object (&frame_native->scanout);
+ 
+-  g_return_if_fail (!frame_native->kms_update);
++  g_clear_object (&frame_native->kms_update);
+ }
+ 
+ MetaFrameNative *
+diff --git a/src/backends/native/meta-onscreen-native.c b/src/backends/native/meta-onscreen-native.c
+index 3975e36d06..f615aacc5e 100644
+--- a/src/backends/native/meta-onscreen-native.c
++++ b/src/backends/native/meta-onscreen-native.c
+@@ -245,7 +245,13 @@ notify_view_crtc_presented (MetaRendererView *view,
+ 
+   frame_info = cogl_onscreen_peek_head_frame_info (onscreen);
+ 
+-  g_return_if_fail (frame_info != NULL);
++  if (!frame_info)
++    {
++      meta_onscreen_native_notify_frame_complete (onscreen);
++      meta_onscreen_native_promote_posted_frame (onscreen);
++      maybe_post_next_frame (onscreen);
++      return;
++    }
+ 
+   frame_counter = cogl_frame_info_get_frame_counter (frame_info);
