@@ -1,3 +1,16 @@
+mutter (1:48.7-0+deb13u1-radxa-2) trixie; urgency=medium
+
+  * d/p/radxa/0002-kms-plane-dynamic-crtc-tracking-and-unassign.patch:
+    Dynamically update current_crtc_id and unassign planes on CRTC disable.
+  * d/p/radxa/0003-fix-hot-unplug-freeze.patch:
+    Return safe defaults for out-of-range monitor indices. Schedule
+    redraw after stage view rebuild to restart frame clock.
+  * d/p/radxa/0004-fix-frame-lifecycle-hotplug.patch:
+    Gracefully release dangling KMS updates. Keep frame clock
+    running when frame_info is NULL.
+
+ -- "Radxa Computer Co., Ltd" <dev@radxa.com>  Tue, 08 Jul 2026 11:00:00 +0800
+
 mutter (48.7-0+deb13u1-radxa-1) trixie; urgency=medium
 
   * d/p/radxa/kms-plane-Avoid-assigning-plane-active-on-other-CRTC.patch:
