@@ -1,0 +1,195 @@
+From: Rafael Bernardy <rafaelbernardyd>
+Date: Wed, 09 Jul 2026 11:30:23 +0000
+Subject: cursor-renderer: Make software cursor overlay visibility per-view
+
+The software cursor overlay's visibility was tracked as a single
+flag shared by the whole stage, computed by OR-ing hardware-cursor
+support across every view. As soon as any view had a hardware
+cursor, the overlay was hidden everywhere, including on views that
+have no hardware cursor plane at all and need the software fallback.
+
+This breaks the cursor on views that lack hardware cursor support
+while another view on the same stage has it, e.g. on Q8B SC8280XP
+with 3 displays but only 2 hardware cursor planes: the display
+without a cursor plane gets no cursor because the global flag hides
+the software overlay as soon as another display uses hardware cursor.
+
+MetaOverlay already tracks per-view state (used for redraw
+clipping), and MetaOverlay's paint function already receives the
+ClutterStageView being painted. Extend that per-view state to also
+track hardware-cursor availability, and consult it in
+meta_overlay_paint() and queue_redraw_for_cursor_overlay() instead
+of the global visibility flag alone. The native cursor renderer
+already computes hardware-cursor support per view; feed that
+directly into the overlay per view instead of collapsing it into a
+single OR'd value.
+
+Origin: upstream, https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/5172
+Bug: https://gitlab.gnome.org/GNOME/mutter/-/work_items/4897
+Bug-Radxa: Q8B 三屏扩展模式第三个屏幕（无硬件 cursor plane）鼠标光标消失
+Forwarded: https://gitlab.gnome.org/GNOME/mutter/-/merge_requests/5172
+Last-Update: 2026-07-22
+diff --git a/src/backends/meta-cursor-renderer.c b/src/backends/meta-cursor-renderer.c
+index 3ccd48c8b..e6ff84d2e 100644
+--- a/src/backends/meta-cursor-renderer.c
++++ b/src/backends/meta-cursor-renderer.c
+@@ -142,9 +142,6 @@ meta_cursor_renderer_update_stage_overlay (MetaCursorRenderer *renderer,
+ 
+   g_set_object (&priv->overlay_cursor, cursor);
+ 
+-  if (!priv->stage_overlay)
+-    priv->stage_overlay = meta_stage_create_cursor_overlay (META_STAGE (stage));
+-
+   graphene_matrix_init_identity (&matrix);
+   if (cursor)
+     {
+@@ -302,6 +299,8 @@ meta_cursor_renderer_constructed (GObject *object)
+                       G_CALLBACK (meta_cursor_renderer_after_paint),
+                       renderer);
+ 
++  priv->stage_overlay = meta_stage_create_cursor_overlay (META_STAGE (stage));
++
+   G_OBJECT_CLASS (meta_cursor_renderer_parent_class)->constructed (object);
+ }
+ 
+@@ -608,3 +607,12 @@ meta_cursor_renderer_needs_overlay (MetaCursorRenderer *renderer)
+ 
+   return priv->needs_overlay;
+ }
++
++MetaOverlay *
++meta_cursor_renderer_get_stage_overlay (MetaCursorRenderer *renderer)
++{
++  MetaCursorRendererPrivate *priv =
++    meta_cursor_renderer_get_instance_private (renderer);
++
++  return priv->stage_overlay;
++}
+diff --git a/src/backends/meta-cursor-renderer.h b/src/backends/meta-cursor-renderer.h
+index 6980ceff2..70ccb65a2 100644
+--- a/src/backends/meta-cursor-renderer.h
++++ b/src/backends/meta-cursor-renderer.h
+@@ -25,6 +25,7 @@
+ #include <glib-object.h>
+ 
+ #include "backends/meta-backend-types.h"
++#include "backends/meta-stage-private.h"
+ #include "core/util-private.h"
+ 
+ #define META_TYPE_HW_CURSOR_INHIBITOR (meta_hw_cursor_inhibitor_get_type ())
+@@ -85,3 +86,5 @@ void meta_cursor_renderer_update_stage_overlay (MetaCursorRenderer *renderer,
+ MetaBackend * meta_cursor_renderer_get_backend (MetaCursorRenderer *renderer);
+ 
+ gboolean meta_cursor_renderer_needs_overlay (MetaCursorRenderer *renderer);
++
++MetaOverlay * meta_cursor_renderer_get_stage_overlay (MetaCursorRenderer *renderer);
+diff --git a/src/backends/meta-stage-private.h b/src/backends/meta-stage-private.h
+index b13571788..cf7bd5a16 100644
+--- a/src/backends/meta-stage-private.h
++++ b/src/backends/meta-stage-private.h
+@@ -58,6 +58,10 @@ void              meta_stage_update_cursor_overlay   (MetaStage               *s
+ void meta_overlay_set_visible (MetaOverlay *overlay,
+                                gboolean     is_visible);
+ 
++void meta_overlay_set_view_has_hw_cursor (MetaOverlay      *overlay,
++                                          ClutterStageView *view,
++                                          gboolean          has_hw_cursor);
++
+ META_EXPORT_TEST
+ MetaStageWatch * meta_stage_watch_view (MetaStage           *stage,
+                                         ClutterStageView    *view,
+diff --git a/src/backends/meta-stage.c b/src/backends/meta-stage.c
+index 66b5aed5d..740f8c2bd 100644
+--- a/src/backends/meta-stage.c
++++ b/src/backends/meta-stage.c
+@@ -40,6 +40,7 @@ typedef struct _MetaOverlayViewState
+ {
+   graphene_rect_t painted_rect;
+   gboolean has_painted_rect;
++  gboolean has_hw_cursor;
+ } MetaOverlayViewState;
+ 
+ struct _MetaOverlay
+@@ -169,8 +170,10 @@ meta_overlay_paint (MetaOverlay         *overlay,
+       CLUTTER_PAINT_FLAG_NO_CURSORS);
+   if (should_paint_any)
+     {
++      gboolean view_has_hw_cursor = view_state && view_state->has_hw_cursor;
++
+       should_paint =
+-        (overlay->texture && overlay->is_visible) ||
++        (overlay->texture && overlay->is_visible && !view_has_hw_cursor) ||
+         (clutter_paint_context_get_paint_flags (paint_context) &
+          CLUTTER_PAINT_FLAG_FORCE_CURSORS);
+     }
+@@ -436,6 +439,7 @@ queue_redraw_for_cursor_overlay (MetaStage   *stage,
+ 
+       if (overlay->is_visible &&
+           overlay->texture &&
++          !view_state->has_hw_cursor &&
+           !(clutter_stage_view_get_default_paint_flags (view) &
+             CLUTTER_PAINT_FLAG_NO_CURSORS) &&
+           !meta_stage_view_is_cursor_overlay_inhibited (META_STAGE_VIEW (view)))
+@@ -495,6 +499,20 @@ meta_overlay_set_visible (MetaOverlay *overlay,
+   queue_redraw_for_cursor_overlay (overlay->stage, overlay);
+ }
+ 
++void
++meta_overlay_set_view_has_hw_cursor (MetaOverlay      *overlay,
++                                     ClutterStageView *view,
++                                     gboolean          has_hw_cursor)
++{
++  MetaOverlayViewState *view_state = ensure_view_state (overlay, view);
++
++  if (view_state->has_hw_cursor == has_hw_cursor)
++    return;
++
++  view_state->has_hw_cursor = has_hw_cursor;
++  queue_redraw_for_cursor_overlay (overlay->stage, overlay);
++}
++
+ MetaStageWatch *
+ meta_stage_watch_view (MetaStage           *stage,
+                        ClutterStageView    *view,
+diff --git a/src/backends/native/meta-cursor-renderer-native.c b/src/backends/native/meta-cursor-renderer-native.c
+index 20218b04a..bbf091c91 100644
+--- a/src/backends/native/meta-cursor-renderer-native.c
++++ b/src/backends/native/meta-cursor-renderer-native.c
+@@ -36,6 +36,7 @@
+ #include "backends/meta-monitor-private.h"
+ #include "backends/meta-monitor-manager-private.h"
+ #include "backends/meta-output.h"
++#include "backends/meta-stage-private.h"
+ #include "backends/native/meta-backend-native-private.h"
+ #include "backends/native/meta-crtc-kms.h"
+ #include "backends/native/meta-device-pool.h"
+@@ -371,7 +372,7 @@ meta_cursor_renderer_native_update_cursor (MetaCursorRenderer *cursor_renderer,
+   MetaRenderer *renderer = meta_backend_get_renderer (backend);
+   MetaKms *kms = meta_backend_native_get_kms (backend_native);
+   MetaKmsCursorManager *kms_cursor_manager = meta_kms_get_cursor_manager (kms);
+-  gboolean cursor_changed, cursor_hw_managed = FALSE;
++  gboolean cursor_changed;
+   GList *views;
+   GList *l;
+ 
+@@ -464,7 +465,9 @@ meta_cursor_renderer_native_update_cursor (MetaCursorRenderer *cursor_renderer,
+             }
+         }
+ 
+-      cursor_hw_managed |= cursor_stage_view->has_hw_cursor;
++      meta_overlay_set_view_has_hw_cursor (meta_cursor_renderer_get_stage_overlay (cursor_renderer),
++                                          CLUTTER_STAGE_VIEW (view),
++                                          has_hw_cursor);
+     }
+ 
+   if (cursor_changed)
+@@ -489,8 +492,7 @@ meta_cursor_renderer_native_update_cursor (MetaCursorRenderer *cursor_renderer,
+   maybe_schedule_cursor_sprite_animation_frame (native, cursor,
+                                                 cursor_changed);
+ 
+-  return (!cursor_hw_managed &&
+-          cursor &&
++  return (cursor &&
+           clutter_cursor_get_texture (cursor, NULL, NULL));
+ }
+ 

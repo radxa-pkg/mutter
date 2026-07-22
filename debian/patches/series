@@ -27,3 +27,4 @@ wayland-seat-Track-current-touch-surface.patch
 radxa/0001-kms-plane-Avoid-assigning-plane-active-on-other-CRTC.patch
 radxa/0002-kms-plane-dynamic-crtc-tracking-and-unassign.patch
 radxa/0003-fix-hot-unplug-freeze.patch
+radxa/0004-cursor-renderer-per-view-software-cursor.patch
