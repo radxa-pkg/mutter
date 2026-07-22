@@ -1,3 +1,13 @@
+mutter (1:50.1-0ubuntu2.2-radxa-2) resolute; urgency=medium
+
+  * d/p/radxa/0004-cursor-renderer-per-view-software-cursor.patch:
+    Make software cursor overlay visibility per-view instead of global.
+    On Q8B SC8280XP with 3 displays but only 2 hardware cursor planes,
+    the display without a cursor plane now gets software-rendered cursor
+    instead of none. Cherry-picked from upstream MR !5172.
+
+ -- "Radxa Computer Co., Ltd" <dev@radxa.com>  Tue, 22 Jul 2026 16:00:00 +0800
+
 mutter (1:50.1-0ubuntu2.2-radxa-1) resolute; urgency=medium
 
   * d/p/radxa/0001-kms-plane-Avoid-assigning-plane-active-on-other-CRTC.patch:
