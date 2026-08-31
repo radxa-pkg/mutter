@@ -1,3 +1,12 @@
+mutter (1:48.7-0+deb13u1-radxa-3) trixie; urgency=medium
+
+  * d/p/radxa/0005-cursor-renderer-per-view-software-cursor.patch:
+    Make software cursor overlay visibility per-view instead of global.
+    Fixes cursor disappearing on displays without hardware cursor plane
+    when another display has one (e.g. Q8B with 3 displays, 2 cursor planes).
+
+ -- "Radxa Computer Co., Ltd" <dev@radxa.com>  Sun, 31 Aug 2026 18:00:00 +0800
+
 mutter (1:48.7-0+deb13u1-radxa-2) trixie; urgency=medium
 
   * d/p/radxa/0002-kms-plane-dynamic-crtc-tracking-and-unassign.patch:
